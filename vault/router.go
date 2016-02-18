@@ -251,7 +251,7 @@ func (r *Router) routeCommon(req *logical.Request, existenceCheck bool) (*logica
 	// If the request is not a login path, then clear the connection
 	originalConn := req.Connection
 	if !loginPath {
-		req.Connection = nil
+		//req.Connection = nil
 	}
 
 	// Reset the request before returning

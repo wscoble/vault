@@ -1,8 +1,11 @@
 package cert
 
 import (
+	"bytes"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
+	"encoding/gob"
 	"encoding/pem"
 	"errors"
 	"strings"
@@ -29,35 +32,16 @@ func pathLogin(b *backend) *framework.Path {
 
 func (b *backend) pathLogin(
 	req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
-	// Get the connection state
-	if req.Connection == nil || req.Connection.ConnState == nil {
-		return logical.ErrorResponse("tls connection required"), nil
-	}
-	connState := req.Connection.ConnState
 
-	// Load the trusted certificates
-	roots, trusted := b.loadTrustedCerts(req.Storage)
-
-	// Validate the connection state is trusted
-	trustedChains, err := validateConnState(roots, connState)
-	if err != nil {
+	var matched *ParsedCert
+	if verifyResp, resp, err := b.verifyCredentials(req); err != nil {
 		return nil, err
+	} else if resp != nil {
+		return resp, nil
+	} else {
+		matched = verifyResp
 	}
 
-	// If no trusted chain was found, client is not authenticated
-	if len(trustedChains) == 0 {
-		return logical.ErrorResponse("invalid certificate or no client certificate supplied"), nil
-	}
-
-	validChain := b.checkForValidChain(req.Storage, trustedChains)
-	if !validChain {
-		return logical.ErrorResponse(
-			"no chain containing non-revoked certificates could be found for this login certificate",
-		), nil
-	}
-
-	// Match the trusted chain with the policy
-	matched := b.matchPolicy(trustedChains, trusted)
 	if matched == nil {
 		return nil, nil
 	}
@@ -67,14 +51,26 @@ func (b *backend) pathLogin(
 		ttl = b.System().DefaultLeaseTTL()
 	}
 
+	// PeerCertificates will not be empty
+	clientCert := req.Connection.ConnState.PeerCertificates[0]
+	var clientCertIssuer bytes.Buffer
+	err := gob.NewEncoder(&clientCertIssuer).Encode(clientCert.Issuer)
+	if err != nil {
+		return nil, err
+	}
+
 	// Generate a response
 	resp := &logical.Response{
 		Auth: &logical.Auth{
+			InternalData: map[string]interface{}{
+				"cert_serial": clientCert.SerialNumber.String(),
+				"cert_issuer": clientCertIssuer.Bytes(),
+			},
 			Policies:    matched.Entry.Policies,
 			DisplayName: matched.Entry.DisplayName,
 			Metadata: map[string]string{
 				"cert_name":   matched.Entry.Name,
-				"common_name": connState.PeerCertificates[0].Subject.CommonName,
+				"common_name": clientCert.Subject.CommonName,
 			},
 			LeaseOptions: logical.LeaseOptions{
 				Renewable: true,
@@ -83,6 +79,78 @@ func (b *backend) pathLogin(
 		},
 	}
 	return resp, nil
+}
+
+func (b *backend) pathLoginRenew(
+	req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+	var matched *ParsedCert
+	if verifyResp, resp, err := b.verifyCredentials(req); err != nil {
+		return nil, err
+	} else if resp != nil {
+		return resp, nil
+	} else {
+		matched = verifyResp
+	}
+
+	if matched == nil {
+		return nil, nil
+	}
+
+	var clientCertIssuer bytes.Buffer
+	err := gob.NewEncoder(&clientCertIssuer).Encode(req.Connection.ConnState.PeerCertificates[0].Issuer)
+	if err != nil {
+		return nil, err
+	}
+
+	// Certificate should not only match a registered certificate policy but it should match the exact same
+	// certificate which was used to login
+	if req.Auth.InternalData["cert_issuer"] != base64.StdEncoding.EncodeToString(clientCertIssuer.Bytes()) {
+		return logical.ErrorResponse("client certificate for renewal request should match the client certificate used for login request"), nil
+	}
+
+	// Get the cert and use its TTL
+	cert, err := b.Cert(req.Storage, req.Auth.Metadata["cert_name"])
+	if err != nil {
+		return nil, err
+	}
+	if cert == nil {
+		// User no longer exists, do not renew
+		return nil, nil
+	}
+
+	return framework.LeaseExtend(cert.TTL, 0, b.System())(req, d)
+}
+
+func (b *backend) verifyCredentials(req *logical.Request) (*ParsedCert, *logical.Response, error) {
+	// Get the connection state
+	if req.Connection == nil || req.Connection.ConnState == nil {
+		return nil, logical.ErrorResponse("tls connection required"), nil
+	}
+	connState := req.Connection.ConnState
+
+	// Load the trusted certificates
+	roots, trusted := b.loadTrustedCerts(req.Storage)
+
+	// Validate the connection state is trusted
+	trustedChains, err := validateConnState(roots, connState)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// If no trusted chain was found, client is not authenticated
+	if len(trustedChains) == 0 {
+		return nil, logical.ErrorResponse("invalid certificate or no client certificate supplied"), nil
+	}
+
+	validChain := b.checkForValidChain(req.Storage, trustedChains)
+	if !validChain {
+		return nil, logical.ErrorResponse(
+			"no chain containing non-revoked certificates could be found for this login certificate",
+		), nil
+	}
+
+	// Match the trusted chain with the policy
+	return b.matchPolicy(trustedChains, trusted), nil, nil
 }
 
 // matchPolicy is used to match the associated policy with the certificate that
@@ -203,19 +271,4 @@ func validateConnState(roots *x509.CertPool, cs *tls.ConnectionState) ([][]*x509
 		return nil, errors.New("failed to verify client's certificate: " + err.Error())
 	}
 	return chains, nil
-}
-
-func (b *backend) pathLoginRenew(
-	req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
-	// Get the cert and use its TTL
-	cert, err := b.Cert(req.Storage, req.Auth.Metadata["cert_name"])
-	if err != nil {
-		return nil, err
-	}
-	if cert == nil {
-		// User no longer exists, do not renew
-		return nil, nil
-	}
-
-	return framework.LeaseExtend(cert.TTL, 0, b.System())(req, d)
 }
