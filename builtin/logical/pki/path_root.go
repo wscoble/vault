@@ -1,6 +1,8 @@
 package pki
 
 import (
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/base64"
 	"fmt"
 	"time"
@@ -176,6 +178,11 @@ func (b *backend) pathCAGenerateRoot(
 		resp.AddWarning("Max path length of the generated certificate is zero. This certificate cannot be used to issue intermediate CA certificates.")
 	}
 
+	if role.KeyType == "rsa" && role.KeyBits == 1024 {
+		resp = &logical.Response{}
+		resp.AddWarning("1024-bit keys are weak and are disallowed in the Internet PKI as unsafe")
+	}
+
 	return resp, nil
 }
 
@@ -271,6 +278,16 @@ func (b *backend) pathCASignIntermediate(
 
 	if parsedBundle.Certificate.MaxPathLen == 0 {
 		resp.AddWarning("Max path length of the signed certificate is zero. This certificate cannot be used to issue intermediate CA certificates.")
+	}
+
+	if parsedBundle.Certificate.PublicKeyAlgorithm == x509.RSA {
+		pubKey, ok := parsedBundle.Certificate.PublicKey.(*rsa.PublicKey)
+		if !ok {
+			return logical.ErrorResponse("could not parse generated certificate's public key"), nil
+		}
+		if pubKey.N.BitLen() == 1024 {
+			resp.AddWarning("1024-bit RSA keys are weak and are disallowed in the Internet PKI as unsafe")
+		}
 	}
 
 	return resp, nil

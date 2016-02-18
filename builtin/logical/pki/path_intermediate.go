@@ -118,6 +118,11 @@ func (b *backend) pathGenerateIntermediate(
 		return nil, err
 	}
 
+	if role.KeyType == "rsa" && role.KeyBits == 1024 {
+		resp = &logical.Response{}
+		resp.AddWarning("1024-bit keys are weak and are disallowed in the Internet PKI as unsafe")
+	}
+
 	return resp, nil
 }
 

@@ -335,7 +335,7 @@ func generateURLSteps(t *testing.T, caCert, caKey string, intdata, reqdata map[s
 		},
 	}
 
-	priv, _ := rsa.GenerateKey(rand.Reader, 2048)
+	priv, _ := rsa.GenerateKey(rand.Reader, 1024)
 	csr, _ := x509.CreateCertificateRequest(rand.Reader, &csrTemplate, priv)
 	csrPem := pem.EncodeToMemory(&pem.Block{
 		Type:  "CERTIFICATE REQUEST",
@@ -414,6 +414,15 @@ func generateURLSteps(t *testing.T, caCert, caKey string, intdata, reqdata map[s
 				case !reflect.DeepEqual(expected.OCSPServers, cert.OCSPServer):
 					return fmt.Errorf("expected\n%#v\ngot\n%#v\n", expected.OCSPServers, cert.OCSPServer)
 				}
+
+				warnings := resp.Warnings()
+				if len(warnings) != 1 {
+					return fmt.Errorf("expected a warning due to 1024-bit key")
+				}
+				if !strings.Contains(warnings[0], "1024") {
+					return fmt.Errorf("recieved a warning but not about a 1024-bit key, warning was: %s", warnings[0])
+				}
+
 				return nil
 			},
 		},

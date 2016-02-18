@@ -1,6 +1,8 @@
 package pki
 
 import (
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/base64"
 	"fmt"
 	"time"
@@ -212,6 +214,16 @@ func (b *backend) pathIssueSignCert(
 	})
 	if err != nil {
 		return nil, fmt.Errorf("Unable to store certificate locally")
+	}
+
+	if parsedBundle.Certificate.PublicKeyAlgorithm == x509.RSA {
+		pubKey, ok := parsedBundle.Certificate.PublicKey.(*rsa.PublicKey)
+		if !ok {
+			return logical.ErrorResponse("could not parse generated certificate's public key"), nil
+		}
+		if pubKey.N.BitLen() == 1024 {
+			resp.AddWarning("1024-bit RSA keys are weak and are disallowed in the Internet PKI as unsafe")
+		}
 	}
 
 	return resp, nil

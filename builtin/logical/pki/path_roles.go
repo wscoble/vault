@@ -356,7 +356,14 @@ func (b *backend) pathRoleCreate(
 		return nil, err
 	}
 
-	return nil, nil
+	var resp *logical.Response
+
+	if entry.KeyType == "rsa" && entry.KeyBits == 1024 {
+		resp = &logical.Response{}
+		resp.AddWarning("1024-bit keys are weak and are disallowed in the Internet PKI as unsafe")
+	}
+
+	return resp, nil
 }
 
 type roleEntry struct {
