@@ -16,7 +16,7 @@ branches:
     - travis-testing
 
 install:
-  - go install vault
+  - go install
 
 script:
   - make test testrace
