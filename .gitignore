@@ -54,3 +54,6 @@ tags
 # Editor backups
 *~
 *.sw[a-z]
+
+# otto directory
+.otto
